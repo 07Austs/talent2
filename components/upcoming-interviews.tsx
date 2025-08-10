@@ -1,82 +1,121 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { supabase } from "@/lib/supabase"
+import { useEffect, useState } from "react"
 import { useAuth } from "@/lib/auth-context"
+import { supabase } from "@/lib/supabase"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Loader2, Calendar, Clock, User, Briefcase, Play } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
+import { Calendar, Clock, User, Video } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 
 interface Interview {
   id: string
   scheduled_at: string
   status: "scheduled" | "in_progress" | "completed" | "cancelled"
-  candidate_name: string
-  job_title: string
-  interviewer_name: string
+  application: {
+    job: {
+      title: string
+      company: {
+        name: string
+      }
+    }
+    candidate: {
+      profile: {
+        full_name: string
+      }
+    }
+  }
+  interviewer: {
+    full_name: string
+  }
 }
 
 export function UpcomingInterviews() {
-  const { profile, user } = useAuth()
+  const { user, profile } = useAuth()
   const { toast } = useToast()
   const [interviews, setInterviews] = useState<Interview[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    if (profile?.id) {
-      fetchInterviews(profile.id, profile.role)
+    if (user && profile) {
+      fetchInterviews()
     }
-  }, [profile])
+  }, [user, profile])
 
-  const fetchInterviews = async (userId: string, role: string) => {
-    setLoading(true)
+  const fetchInterviews = async () => {
     try {
-      let query = supabase.from("interviews").select(
-        `
+      let query = supabase
+        .from("interviews")
+        .select(`
           id,
           scheduled_at,
           status,
-          applications (
-            jobs (title),
-            candidates (profiles (full_name))
+          application:applications(
+            job:jobs(
+              title,
+              company:companies(name)
+            ),
+            candidate:candidates(
+              profile:profiles(full_name)
+            )
           ),
-          profiles (full_name)
-        `,
-      )
+          interviewer:profiles!interviews_interviewer_id_fkey(full_name)
+        `)
+        .in("status", ["scheduled", "in_progress"])
+        .order("scheduled_at", { ascending: true })
 
-      if (role === "candidate") {
-        query = query.eq("applications.candidates.profile_id", userId)
-      } else if (role === "recruiter") {
-        query = query.eq("interviewer_id", userId)
-      } else {
-        // Admins can see all interviews
+      // Filter based on user role
+      if (profile?.role === "candidate") {
+        // For candidates, show interviews where they are the candidate
+        query = query.eq("application.candidate.profile_id", user!.id)
+      } else if (profile?.role === "recruiter") {
+        // For recruiters, show interviews they are conducting
+        query = query.eq("interviewer_id", user!.id)
       }
 
-      const { data, error } = await query.order("scheduled_at", { ascending: true })
+      const { data, error } = await query
 
       if (error) throw error
-
-      const formattedInterviews: Interview[] = (data || []).map((i: any) => ({
-        id: i.id,
-        scheduled_at: i.scheduled_at,
-        status: i.status,
-        candidate_name: i.applications?.candidates?.profiles?.full_name || "N/A",
-        job_title: i.applications?.jobs?.title || "N/A",
-        interviewer_name: i.profiles?.full_name || "N/A",
-      }))
-      setInterviews(formattedInterviews)
-    } catch (error: any) {
+      setInterviews(data || [])
+    } catch (error) {
       console.error("Error fetching interviews:", error)
       toast({
         title: "Error",
-        description: error.message || "Failed to load interviews.",
+        description: "Failed to load interviews",
         variant: "destructive",
       })
     } finally {
       setLoading(false)
+    }
+  }
+
+  const startInterview = async (interviewId: string) => {
+    try {
+      const { error } = await supabase.from("interviews").update({ status: "in_progress" }).eq("id", interviewId)
+
+      if (error) throw error
+
+      toast({
+        title: "Interview Started",
+        description: "Redirecting to interview session...",
+      })
+
+      // In a real app, this would redirect to the interview session
+      // For now, we'll just show a toast
+      setTimeout(() => {
+        toast({
+          title: "Interview Session",
+          description: "This would open the real-time interview interface",
+        })
+      }, 1000)
+    } catch (error) {
+      console.error("Error starting interview:", error)
+      toast({
+        title: "Error",
+        description: "Failed to start interview",
+        variant: "destructive",
+      })
     }
   }
 
@@ -85,9 +124,9 @@ export function UpcomingInterviews() {
       case "scheduled":
         return "bg-blue-100 text-blue-800"
       case "in_progress":
-        return "bg-yellow-100 text-yellow-800"
-      case "completed":
         return "bg-green-100 text-green-800"
+      case "completed":
+        return "bg-gray-100 text-gray-800"
       case "cancelled":
         return "bg-red-100 text-red-800"
       default:
@@ -95,95 +134,109 @@ export function UpcomingInterviews() {
     }
   }
 
-  const handleStartInterview = (interviewId: string) => {
-    // In a real application, this would navigate to the interview session page
-    // and update the interview status to 'in_progress'
-    toast({
-      title: "Starting Interview",
-      description: `Navigating to interview session ${interviewId}... (Simulated)`,
-    })
-    console.log(`Simulating start of interview: ${interviewId}`)
-    // Example: router.push(`/interview/${interviewId}`);
+  const formatDateTime = (dateString: string) => {
+    const date = new Date(dateString)
+    return {
+      date: date.toLocaleDateString(),
+      time: date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    }
   }
 
-  if (loading && interviews.length === 0) {
+  if (loading) {
     return (
-      <Card className="w-full">
-        <CardHeader>
-          <CardTitle>Upcoming Interviews</CardTitle>
-          <CardDescription>Loading your interview schedule...</CardDescription>
-        </CardHeader>
-        <CardContent className="flex justify-center items-center h-48">
-          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      <div className="space-y-4">
+        {[1, 2, 3].map((i) => (
+          <Card key={i}>
+            <CardContent className="p-6">
+              <div className="animate-pulse space-y-3">
+                <div className="h-4 bg-gray-200 rounded w-3/4"></div>
+                <div className="h-3 bg-gray-200 rounded w-1/2"></div>
+                <div className="h-3 bg-gray-200 rounded w-1/4"></div>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    )
+  }
+
+  if (interviews.length === 0) {
+    return (
+      <Card>
+        <CardContent className="p-6 text-center">
+          <Calendar className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+          <h3 className="text-lg font-medium text-gray-900 mb-2">No upcoming interviews</h3>
+          <p className="text-gray-500">
+            {profile?.role === "candidate"
+              ? "You don't have any scheduled interviews at the moment."
+              : "You don't have any interviews to conduct at the moment."}
+          </p>
         </CardContent>
       </Card>
     )
   }
 
   return (
-    <Card className="w-full">
-      <CardHeader>
-        <CardTitle>Upcoming Interviews</CardTitle>
-        <CardDescription>Your scheduled AI-powered interview sessions.</CardDescription>
-      </CardHeader>
-      <CardContent>
-        {interviews.length === 0 ? (
-          <div className="text-center py-8 text-muted-foreground">No interviews scheduled.</div>
-        ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Candidate</TableHead>
-                <TableHead>Job Title</TableHead>
-                <TableHead>Interviewer</TableHead>
-                <TableHead>Scheduled At</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {interviews.map((interview) => (
-                <TableRow key={interview.id}>
-                  <TableCell className="font-medium">
-                    <div className="flex items-center gap-2">
-                      <User className="h-4 w-4 text-muted-foreground" />
-                      {interview.candidate_name}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <Briefcase className="inline-block h-4 w-4 mr-1 text-muted-foreground" />
-                    {interview.job_title}
-                  </TableCell>
-                  <TableCell>{interview.interviewer_name}</TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-2">
-                      <Calendar className="h-4 w-4 text-muted-foreground" />
-                      {new Date(interview.scheduled_at).toLocaleDateString()}
-                      <Clock className="h-4 w-4 text-muted-foreground" />
-                      {new Date(interview.scheduled_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="secondary" className={getStatusColor(interview.status)}>
-                      {interview.status.replace("_", " ").charAt(0).toUpperCase() +
-                        interview.status.replace("_", " ").slice(1)}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    {interview.status === "scheduled" && (
-                      <Button size="sm" onClick={() => handleStartInterview(interview.id)}>
-                        <Play className="mr-2 h-4 w-4" />
-                        Start Interview
-                      </Button>
-                    )}
-                    {/* Add other actions like "View Details", "Reschedule", "Cancel" */}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        )}
-      </CardContent>
-    </Card>
+    <div className="space-y-4">
+      {interviews.map((interview) => {
+        const { date, time } = formatDateTime(interview.scheduled_at)
+        const isCandidate = profile?.role === "candidate"
+
+        return (
+          <Card key={interview.id}>
+            <CardHeader>
+              <div className="flex items-start justify-between">
+                <div>
+                  <CardTitle className="text-lg">{interview.application.job.title}</CardTitle>
+                  <CardDescription>{interview.application.job.company.name}</CardDescription>
+                </div>
+                <Badge className={getStatusColor(interview.status)}>{interview.status.replace("_", " ")}</Badge>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                <div className="flex items-center gap-4 text-sm text-gray-600">
+                  <div className="flex items-center gap-1">
+                    <Calendar className="h-4 w-4" />
+                    <span>{date}</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Clock className="h-4 w-4" />
+                    <span>{time}</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1 text-sm text-gray-600">
+                  <User className="h-4 w-4" />
+                  <span>
+                    {isCandidate
+                      ? `Interviewer: ${interview.interviewer.full_name}`
+                      : `Candidate: ${interview.application.candidate.profile.full_name}`}
+                  </span>
+                </div>
+
+                {interview.status === "scheduled" && (
+                  <div className="pt-2">
+                    <Button onClick={() => startInterview(interview.id)} className="w-full sm:w-auto">
+                      <Video className="h-4 w-4 mr-2" />
+                      Start Interview
+                    </Button>
+                  </div>
+                )}
+
+                {interview.status === "in_progress" && (
+                  <div className="pt-2">
+                    <Button variant="outline" className="w-full sm:w-auto bg-transparent">
+                      <Video className="h-4 w-4 mr-2" />
+                      Join Interview
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )
+      })}
+    </div>
   )
 }

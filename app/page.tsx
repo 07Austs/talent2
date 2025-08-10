@@ -11,40 +11,40 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Brain, Users, Zap, Shield, TrendingUp, Star, AlertCircle } from "lucide-react"
+import { Brain, Users, Zap, Shield, TrendingUp, Star, AlertCircle, Loader2 } from "lucide-react"
 import { useState } from "react"
 
 function LandingPage() {
-  const { signIn, signUp } = useAuth()
+  const { signIn, signUp, loading } = useAuth()
   const [isSignUp, setIsSignUp] = useState(false)
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [fullName, setFullName] = useState("")
   const [role, setRole] = useState<"candidate" | "recruiter">("candidate")
-  const [loading, setLoading] = useState(false)
+  const [formLoading, setFormLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    setLoading(true)
+    setFormLoading(true)
     setError(null)
 
     // Basic validation
     if (isSignUp && !fullName.trim()) {
       setError("Full name is required")
-      setLoading(false)
+      setFormLoading(false)
       return
     }
 
     if (!email.trim() || !password.trim()) {
       setError("Email and password are required")
-      setLoading(false)
+      setFormLoading(false)
       return
     }
 
     if (password.length < 6) {
       setError("Password must be at least 6 characters")
-      setLoading(false)
+      setFormLoading(false)
       return
     }
 
@@ -58,8 +58,21 @@ function LandingPage() {
       console.error("Auth error:", error)
       setError(error.message || "Authentication failed. Please try again.")
     } finally {
-      setLoading(false)
+      setFormLoading(false)
     }
+  }
+
+  const resetForm = () => {
+    setEmail("")
+    setPassword("")
+    setFullName("")
+    setRole("candidate")
+    setError(null)
+  }
+
+  const toggleMode = () => {
+    setIsSignUp(!isSignUp)
+    resetForm()
   }
 
   return (
@@ -142,6 +155,7 @@ function LandingPage() {
                       onChange={(e) => setFullName(e.target.value)}
                       placeholder="Enter your full name"
                       required
+                      disabled={formLoading}
                     />
                   </div>
                 )}
@@ -155,6 +169,7 @@ function LandingPage() {
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="Enter your email"
                     required
+                    disabled={formLoading}
                   />
                 </div>
 
@@ -168,6 +183,7 @@ function LandingPage() {
                     placeholder="Enter your password"
                     required
                     minLength={6}
+                    disabled={formLoading}
                   />
                   {isSignUp && <p className="text-xs text-muted-foreground">Password must be at least 6 characters</p>}
                 </div>
@@ -177,25 +193,36 @@ function LandingPage() {
                     <Label>I am a:</Label>
                     <Tabs value={role} onValueChange={(value) => setRole(value as "candidate" | "recruiter")}>
                       <TabsList className="grid w-full grid-cols-2">
-                        <TabsTrigger value="candidate">Job Seeker</TabsTrigger>
-                        <TabsTrigger value="recruiter">Recruiter</TabsTrigger>
+                        <TabsTrigger value="candidate" disabled={formLoading}>
+                          Job Seeker
+                        </TabsTrigger>
+                        <TabsTrigger value="recruiter" disabled={formLoading}>
+                          Recruiter
+                        </TabsTrigger>
                       </TabsList>
                     </Tabs>
                   </div>
                 )}
 
-                <Button type="submit" className="w-full" disabled={loading}>
-                  {loading ? "Loading..." : isSignUp ? "Create Account" : "Sign In"}
+                <Button type="submit" className="w-full" disabled={formLoading || loading}>
+                  {formLoading || loading ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      {isSignUp ? "Creating Account..." : "Signing In..."}
+                    </>
+                  ) : isSignUp ? (
+                    "Create Account"
+                  ) : (
+                    "Sign In"
+                  )}
                 </Button>
 
                 <div className="text-center">
                   <button
                     type="button"
-                    onClick={() => {
-                      setIsSignUp(!isSignUp)
-                      setError(null)
-                    }}
+                    onClick={toggleMode}
                     className="text-sm text-primary hover:underline"
+                    disabled={formLoading}
                   >
                     {isSignUp ? "Already have an account? Sign in" : "Don't have an account? Sign up"}
                   </button>
@@ -280,7 +307,7 @@ export default function HomePage() {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center space-y-4">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div>
+          <Loader2 className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto" />
           <p className="text-muted-foreground">Loading your dashboard...</p>
         </div>
       </div>

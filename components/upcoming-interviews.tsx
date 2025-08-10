@@ -1,13 +1,15 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useState, useEffect } from "react"
 import { useAuth } from "@/lib/auth-context"
 import { supabase } from "@/lib/supabase"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Calendar, Clock, User, Video } from "lucide-react"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Calendar, Clock, User, Video, FileText, AlertCircle, CheckCircle } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
+import { format } from "date-fns"
 
 interface Interview {
   id: string
@@ -23,27 +25,36 @@ interface Interview {
     candidate: {
       profile: {
         full_name: string
+        email: string
       }
     }
   }
   interviewer: {
     full_name: string
+    email: string
   }
+  technical_score: number | null
+  soft_skills_score: number | null
+  integrity_score: number | null
+  feedback: string | null
 }
 
 export function UpcomingInterviews() {
-  const { user, profile } = useAuth()
+  const { profile, user } = useAuth()
   const { toast } = useToast()
   const [interviews, setInterviews] = useState<Interview[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    if (user && profile) {
+    if (profile && user) {
       fetchInterviews()
     }
-  }, [user, profile])
+  }, [profile, user])
 
   const fetchInterviews = async () => {
+    if (!profile || !user) return
+
+    setLoading(true)
     try {
       let query = supabase
         .from("interviews")
@@ -51,38 +62,74 @@ export function UpcomingInterviews() {
           id,
           scheduled_at,
           status,
-          application:applications(
-            job:jobs(
+          technical_score,
+          soft_skills_score,
+          integrity_score,
+          feedback,
+          applications (
+            jobs (
               title,
-              company:companies(name)
+              companies (name)
             ),
-            candidate:candidates(
-              profile:profiles(full_name)
+            candidates (
+              profiles (full_name, email)
             )
           ),
-          interviewer:profiles!interviews_interviewer_id_fkey(full_name)
+          interviewer:profiles!interviews_interviewer_id_fkey (
+            full_name,
+            email
+          )
         `)
-        .in("status", ["scheduled", "in_progress"])
         .order("scheduled_at", { ascending: true })
 
       // Filter based on user role
-      if (profile?.role === "candidate") {
-        // For candidates, show interviews where they are the candidate
-        query = query.eq("application.candidate.profile_id", user!.id)
-      } else if (profile?.role === "recruiter") {
-        // For recruiters, show interviews they are conducting
-        query = query.eq("interviewer_id", user!.id)
+      if (profile.role === "candidate") {
+        // For candidates, get interviews where they are the candidate
+        query = query.eq("applications.candidate_id", user.id)
+      } else if (profile.role === "recruiter") {
+        // For recruiters, get interviews they are conducting
+        query = query.eq("interviewer_id", user.id)
       }
 
       const { data, error } = await query
 
       if (error) throw error
-      setInterviews(data || [])
-    } catch (error) {
+
+      // Transform the data to match our interface
+      const transformedData: Interview[] = (data || []).map((interview: any) => ({
+        id: interview.id,
+        scheduled_at: interview.scheduled_at,
+        status: interview.status,
+        technical_score: interview.technical_score,
+        soft_skills_score: interview.soft_skills_score,
+        integrity_score: interview.integrity_score,
+        feedback: interview.feedback,
+        application: {
+          job: {
+            title: interview.applications?.jobs?.title || "Unknown Position",
+            company: {
+              name: interview.applications?.jobs?.companies?.name || "Unknown Company",
+            },
+          },
+          candidate: {
+            profile: {
+              full_name: interview.applications?.candidates?.profiles?.full_name || "Unknown Candidate",
+              email: interview.applications?.candidates?.profiles?.email || "",
+            },
+          },
+        },
+        interviewer: {
+          full_name: interview.interviewer?.full_name || "Unknown Interviewer",
+          email: interview.interviewer?.email || "",
+        },
+      }))
+
+      setInterviews(transformedData)
+    } catch (error: any) {
       console.error("Error fetching interviews:", error)
       toast({
         title: "Error",
-        description: "Failed to load interviews",
+        description: error.message || "Failed to load interviews.",
         variant: "destructive",
       })
     } finally {
@@ -90,32 +137,18 @@ export function UpcomingInterviews() {
     }
   }
 
-  const startInterview = async (interviewId: string) => {
-    try {
-      const { error } = await supabase.from("interviews").update({ status: "in_progress" }).eq("id", interviewId)
-
-      if (error) throw error
-
-      toast({
-        title: "Interview Started",
-        description: "Redirecting to interview session...",
-      })
-
-      // In a real app, this would redirect to the interview session
-      // For now, we'll just show a toast
-      setTimeout(() => {
-        toast({
-          title: "Interview Session",
-          description: "This would open the real-time interview interface",
-        })
-      }, 1000)
-    } catch (error) {
-      console.error("Error starting interview:", error)
-      toast({
-        title: "Error",
-        description: "Failed to start interview",
-        variant: "destructive",
-      })
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case "scheduled":
+        return <Calendar className="h-4 w-4 text-blue-500" />
+      case "in_progress":
+        return <Video className="h-4 w-4 text-green-500" />
+      case "completed":
+        return <CheckCircle className="h-4 w-4 text-green-600" />
+      case "cancelled":
+        return <AlertCircle className="h-4 w-4 text-red-500" />
+      default:
+        return <Clock className="h-4 w-4 text-gray-500" />
     }
   }
 
@@ -134,109 +167,191 @@ export function UpcomingInterviews() {
     }
   }
 
-  const formatDateTime = (dateString: string) => {
-    const date = new Date(dateString)
-    return {
-      date: date.toLocaleDateString(),
-      time: date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-    }
+  const handleStartInterview = (interviewId: string) => {
+    toast({
+      title: "Starting Interview",
+      description: "Redirecting to interview session...",
+    })
+    // In a real app, this would navigate to the interview session
+    window.open(`/interview/${interviewId}`, "_blank")
+  }
+
+  const handleJoinInterview = (interviewId: string) => {
+    toast({
+      title: "Joining Interview",
+      description: "Connecting to interview session...",
+    })
+    // In a real app, this would navigate to the interview session
+    window.open(`/interview/${interviewId}`, "_blank")
+  }
+
+  const isInterviewSoon = (scheduledAt: string) => {
+    const interviewTime = new Date(scheduledAt)
+    const now = new Date()
+    const timeDiff = interviewTime.getTime() - now.getTime()
+    return timeDiff > 0 && timeDiff <= 30 * 60 * 1000 // Within 30 minutes
   }
 
   if (loading) {
     return (
-      <div className="space-y-4">
-        {[1, 2, 3].map((i) => (
-          <Card key={i}>
-            <CardContent className="p-6">
-              <div className="animate-pulse space-y-3">
-                <div className="h-4 bg-gray-200 rounded w-3/4"></div>
-                <div className="h-3 bg-gray-200 rounded w-1/2"></div>
-                <div className="h-3 bg-gray-200 rounded w-1/4"></div>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-    )
-  }
-
-  if (interviews.length === 0) {
-    return (
       <Card>
-        <CardContent className="p-6 text-center">
-          <Calendar className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-          <h3 className="text-lg font-medium text-gray-900 mb-2">No upcoming interviews</h3>
-          <p className="text-gray-500">
-            {profile?.role === "candidate"
-              ? "You don't have any scheduled interviews at the moment."
-              : "You don't have any interviews to conduct at the moment."}
-          </p>
+        <CardHeader>
+          <CardTitle>Upcoming Interviews</CardTitle>
+          <CardDescription>Loading your interview schedule...</CardDescription>
+        </CardHeader>
+        <CardContent className="flex justify-center items-center h-48">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
         </CardContent>
       </Card>
     )
   }
 
+  const upcomingInterviews = interviews.filter(
+    (interview) => interview.status === "scheduled" || interview.status === "in_progress",
+  )
+  const completedInterviews = interviews.filter((interview) => interview.status === "completed")
+
   return (
-    <div className="space-y-4">
-      {interviews.map((interview) => {
-        const { date, time } = formatDateTime(interview.scheduled_at)
-        const isCandidate = profile?.role === "candidate"
-
-        return (
-          <Card key={interview.id}>
-            <CardHeader>
-              <div className="flex items-start justify-between">
-                <div>
-                  <CardTitle className="text-lg">{interview.application.job.title}</CardTitle>
-                  <CardDescription>{interview.application.job.company.name}</CardDescription>
+    <div className="space-y-6">
+      {/* Upcoming Interviews */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Calendar className="h-5 w-5" />
+            Upcoming Interviews
+          </CardTitle>
+          <CardDescription>
+            {profile?.role === "candidate" ? "Your scheduled interview sessions" : "Interviews you're conducting"}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {upcomingInterviews.length === 0 ? (
+            <div className="text-center py-8">
+              <Calendar className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+              <h3 className="text-lg font-semibold mb-2">No upcoming interviews</h3>
+              <p className="text-muted-foreground">
+                {profile?.role === "candidate"
+                  ? "Apply to more jobs to get interview opportunities"
+                  : "Schedule interviews with shortlisted candidates"}
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {upcomingInterviews.map((interview) => (
+                <div
+                  key={interview.id}
+                  className={`p-4 border rounded-lg ${
+                    isInterviewSoon(interview.scheduled_at) ? "border-orange-200 bg-orange-50" : ""
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <h3 className="font-semibold">{interview.application.job.title}</h3>
+                        <Badge variant="secondary" className={getStatusColor(interview.status)}>
+                          <div className="flex items-center gap-1">
+                            {getStatusIcon(interview.status)}
+                            {interview.status.charAt(0).toUpperCase() + interview.status.slice(1)}
+                          </div>
+                        </Badge>
+                        {isInterviewSoon(interview.scheduled_at) && <Badge variant="destructive">Starting Soon</Badge>}
+                      </div>
+                      <p className="text-sm text-muted-foreground">{interview.application.job.company.name}</p>
+                      <div className="flex items-center gap-4 text-sm text-muted-foreground">
+                        <div className="flex items-center gap-1">
+                          <Clock className="h-4 w-4" />
+                          {format(new Date(interview.scheduled_at), "PPP 'at' p")}
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <User className="h-4 w-4" />
+                          {profile?.role === "candidate"
+                            ? `Interviewer: ${interview.interviewer.full_name}`
+                            : `Candidate: ${interview.application.candidate.profile.full_name}`}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      {interview.status === "scheduled" && (
+                        <Button
+                          onClick={() =>
+                            profile?.role === "candidate"
+                              ? handleJoinInterview(interview.id)
+                              : handleStartInterview(interview.id)
+                          }
+                          disabled={!isInterviewSoon(interview.scheduled_at)}
+                        >
+                          <Video className="mr-2 h-4 w-4" />
+                          {profile?.role === "candidate" ? "Join Interview" : "Start Interview"}
+                        </Button>
+                      )}
+                      {interview.status === "in_progress" && (
+                        <Button variant="destructive" onClick={() => handleJoinInterview(interview.id)}>
+                          <Video className="mr-2 h-4 w-4" />
+                          Resume Interview
+                        </Button>
+                      )}
+                    </div>
+                  </div>
                 </div>
-                <Badge className={getStatusColor(interview.status)}>{interview.status.replace("_", " ")}</Badge>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                <div className="flex items-center gap-4 text-sm text-gray-600">
-                  <div className="flex items-center gap-1">
-                    <Calendar className="h-4 w-4" />
-                    <span>{date}</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <Clock className="h-4 w-4" />
-                    <span>{time}</span>
-                  </div>
-                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
-                <div className="flex items-center gap-1 text-sm text-gray-600">
-                  <User className="h-4 w-4" />
-                  <span>
-                    {isCandidate
-                      ? `Interviewer: ${interview.interviewer.full_name}`
-                      : `Candidate: ${interview.application.candidate.profile.full_name}`}
-                  </span>
-                </div>
-
-                {interview.status === "scheduled" && (
-                  <div className="pt-2">
-                    <Button onClick={() => startInterview(interview.id)} className="w-full sm:w-auto">
-                      <Video className="h-4 w-4 mr-2" />
-                      Start Interview
-                    </Button>
-                  </div>
-                )}
-
-                {interview.status === "in_progress" && (
-                  <div className="pt-2">
-                    <Button variant="outline" className="w-full sm:w-auto bg-transparent">
-                      <Video className="h-4 w-4 mr-2" />
-                      Join Interview
-                    </Button>
-                  </div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        )
-      })}
+      {/* Completed Interviews */}
+      {completedInterviews.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <CheckCircle className="h-5 w-5" />
+              Completed Interviews
+            </CardTitle>
+            <CardDescription>Review past interview performance and feedback</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Position</TableHead>
+                  <TableHead>Company</TableHead>
+                  <TableHead>Date</TableHead>
+                  <TableHead>Scores</TableHead>
+                  <TableHead>Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {completedInterviews.map((interview) => (
+                  <TableRow key={interview.id}>
+                    <TableCell className="font-medium">{interview.application.job.title}</TableCell>
+                    <TableCell>{interview.application.job.company.name}</TableCell>
+                    <TableCell>{format(new Date(interview.scheduled_at), "PP")}</TableCell>
+                    <TableCell>
+                      <div className="flex gap-2">
+                        {interview.technical_score && (
+                          <Badge variant="outline">Tech: {interview.technical_score}%</Badge>
+                        )}
+                        {interview.soft_skills_score && (
+                          <Badge variant="outline">Soft: {interview.soft_skills_score}%</Badge>
+                        )}
+                        {interview.integrity_score && (
+                          <Badge variant="outline">Integrity: {interview.integrity_score}%</Badge>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Button variant="outline" size="sm">
+                        <FileText className="mr-2 h-4 w-4" />
+                        View Report
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
     </div>
   )
 }

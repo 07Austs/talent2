@@ -52,19 +52,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(session?.user ?? null)
 
       if (session?.user) {
-        // Wait a bit for the trigger to create the profile
-        if (event === "SIGNED_UP") {
-          setTimeout(() => {
-            fetchProfile(session.user.id)
-            if (session.user.user_metadata.role === "candidate") {
-              fetchCandidateProfile(session.user.id)
-            }
-          }, 1000)
-        } else {
-          await fetchProfile(session.user.id)
-          if (session.user.user_metadata.role === "candidate") {
-            await fetchCandidateProfile(session.user.id)
-          }
+        await fetchProfile(session.user.id)
+        if (session.user.user_metadata.role === "candidate") {
+          await fetchCandidateProfile(session.user.id)
         }
       } else {
         setProfile(null)
@@ -168,7 +158,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signUp = async (email: string, password: string, fullName: string, role: Profile["role"]) => {
     try {
-      const { data, error } = await supabase.auth.signUp({
+      const { data, error: authError } = await supabase.auth.signUp({
         email,
         password,
         options: {
@@ -179,10 +169,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         },
       })
 
-      if (error) throw error
+      if (authError) throw authError
 
-      // The profile will be created automatically by the database trigger
-      // No need to manually create it here
+      if (data.user) {
+        // Manually create profile entry
+        const { error: profileError } = await supabase.from("profiles").insert({
+          id: data.user.id,
+          email: data.user.email!,
+          full_name: fullName,
+          role: role,
+        })
+
+        if (profileError) throw profileError
+
+        // If the user is a candidate, also create a candidate record
+        if (role === "candidate") {
+          const { error: candidateError } = await supabase.from("candidates").insert({
+            profile_id: data.user.id,
+            skills: [], // Initialize with empty array
+            ai_score: 0.0,
+          })
+          if (candidateError) throw candidateError
+        }
+
+        // Fetch the newly created profile and candidate profile
+        await fetchProfile(data.user.id)
+        if (role === "candidate") {
+          await fetchCandidateProfile(data.user.id)
+        }
+      }
     } catch (error: any) {
       console.error("Sign up error:", error)
       toast({
